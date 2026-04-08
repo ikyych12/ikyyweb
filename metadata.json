@@ -1,0 +1,5 @@
+{
+  "name": "BlastWA - WhatsApp Rental & Blast System",
+  "description": "Sistem sewa nomor WhatsApp dengan fitur referral, blast pesan, pairing code/QR, dan sistem withdraw komisi.",
+  "requestFramePermissions": []
+}
