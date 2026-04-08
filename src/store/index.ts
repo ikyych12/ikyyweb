@@ -167,7 +167,8 @@ export const useStore = () => {
       updateData({ devices: [...data.devices, newDevice] });
     },
     updateDeviceStatus: (deviceId: string, status: 'connected' | 'disconnected', phoneNumber?: string) => {
-      const updatedDevices = data.devices.map(d => 
+      const currentData = getStore();
+      const updatedDevices = currentData.devices.map(d => 
         d.id === deviceId ? { ...d, status, phoneNumber: phoneNumber || d.phoneNumber } : d
       );
       updateData({ devices: updatedDevices });

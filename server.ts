@@ -38,9 +38,13 @@ async function startServer() {
   io.on("connection", (socket) => {
     console.log("Client connected:", socket.id);
 
-    socket.on("init-session", async (deviceId: string) => {
-      console.log("Initializing session for:", deviceId);
-      await createWhatsAppSession(deviceId, socket);
+    socket.on("init-session", async (deviceId: string, phoneNumber?: string, method: 'qr' | 'pairing' = 'qr') => {
+      console.log(`Initializing ${method} session for: ${deviceId} (Socket: ${socket.id})`);
+      
+      // Join a room for this device to handle refreshes/multiple tabs
+      socket.join(`device-${deviceId}`);
+      
+      await createWhatsAppSession(deviceId, phoneNumber, method);
     });
 
     socket.on("disconnect", () => {
@@ -48,24 +52,37 @@ async function startServer() {
     });
   });
 
-  async function createWhatsAppSession(deviceId: string, socket: any) {
+  async function createWhatsAppSession(deviceId: string, phoneNumber?: string, method: 'qr' | 'pairing' = 'qr') {
     try {
+      // If session already exists and is connected, just notify the client
+      const existingSock = sessions.get(deviceId);
+      if (existingSock) {
+        console.log(`[${deviceId}] Session already exists. Checking state...`);
+        // We could check connection state here, but for now let's just restart to be sure
+        // or just return if it's already open.
+        // To be safe and allow re-pairing, let's close the old one.
+        try {
+          existingSock.ev.removeAllListeners("connection.update");
+          existingSock.logout();
+          existingSock.end(undefined);
+        } catch (e) {}
+        sessions.delete(deviceId);
+      }
+
       const sessionDir = path.join(__dirname, "sessions", deviceId);
       if (!fs.existsSync(sessionDir)) {
         fs.mkdirSync(sessionDir, { recursive: true });
       }
 
-      console.log(`[${deviceId}] Starting session initialization...`);
+      console.log(`[${deviceId}] Starting session initialization (${method})...`);
       const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
       
       let version;
       try {
         const latest = await fetchLatestBaileysVersion();
         version = latest.version;
-        console.log(`[${deviceId}] Using Baileys version:`, version.join("."));
       } catch (err) {
-        console.error(`[${deviceId}] Failed to fetch version, using default`, err);
-        version = [2, 3000, 1015901307]; // Fallback version
+        version = [2, 3000, 1015901307];
       }
 
       const sock = makeWASocket({
@@ -76,10 +93,35 @@ async function startServer() {
           keys: makeCacheableSignalKeyStore(state.keys, logger),
         },
         logger,
-        browser: ["BlastWA", "Chrome", "1.0.0"],
+        browser: ["Linux", "Chrome", "110.0.5481.178"], // Standard browser string
       });
 
       sessions.set(deviceId, sock);
+
+      if (method === 'pairing' && phoneNumber && !sock.authState.creds.registered) {
+        // Wait for the socket to be ready
+        setTimeout(async () => {
+          try {
+            let formattedPhone = phoneNumber.replace(/\D/g, '');
+            // Simple Indonesian number fix: 08 -> 628
+            if (formattedPhone.startsWith('0')) {
+              formattedPhone = '62' + formattedPhone.slice(1);
+            }
+            
+            console.log(`[${deviceId}] Requesting pairing code for ${formattedPhone}...`);
+            const code = await sock.requestPairingCode(formattedPhone);
+            console.log(`[${deviceId}] Pairing code generated:`, code);
+            io.to(`device-${deviceId}`).emit("pairing-code", { deviceId, code });
+          } catch (err) {
+            console.error(`[${deviceId}] Failed to request pairing code:`, err);
+            const errMsg = err instanceof Error ? err.message : "Gagal meminta Pairing Code";
+            io.to(`device-${deviceId}`).emit("error", { 
+              deviceId, 
+              message: `Gagal: ${errMsg}. Pastikan nomor benar (gunakan format 628xxx) dan belum tertaut.` 
+            });
+          }
+        }, 5000);
+      }
 
       sock.ev.on("creds.update", saveCreds);
 
@@ -87,14 +129,12 @@ async function startServer() {
         const { connection, lastDisconnect, qr } = update;
         console.log(`[${deviceId}] Connection update:`, connection);
 
-        if (qr) {
+        if (qr && method === 'qr') {
           try {
-            console.log(`[${deviceId}] QR generated`);
             const qrDataUrl = await QRCode.toDataURL(qr);
-            socket.emit("qr", { deviceId, qr: qrDataUrl });
+            io.to(`device-${deviceId}`).emit("qr", { deviceId, qr: qrDataUrl });
           } catch (qrErr) {
-            console.error(`[${deviceId}] QR generation error:`, qrErr);
-            socket.emit("error", { deviceId, message: "Gagal membuat QR Code" });
+            io.to(`device-${deviceId}`).emit("error", { deviceId, message: "Gagal membuat QR Code" });
           }
         }
 
@@ -103,31 +143,29 @@ async function startServer() {
           const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
           console.log(`[${deviceId}] Connection closed. Status: ${statusCode}, Reconnecting: ${shouldReconnect}`);
           
-          socket.emit("status", { deviceId, status: "disconnected" });
+          io.to(`device-${deviceId}`).emit("status", { deviceId, status: "disconnected" });
           
           if (shouldReconnect) {
-            createWhatsAppSession(deviceId, socket);
+            createWhatsAppSession(deviceId, phoneNumber, method);
           } else {
             sessions.delete(deviceId);
             if (fs.existsSync(sessionDir)) {
               try {
                 fs.rmSync(sessionDir, { recursive: true, force: true });
-              } catch (rmErr) {
-                console.error("Failed to remove session dir:", rmErr);
-              }
+              } catch (rmErr) {}
             }
           }
         } else if (connection === "open") {
           console.log(`[${deviceId}] Connection opened successfully`);
           const phoneNumber = sock.user?.id.split(":")[0];
-          socket.emit("status", { deviceId, status: "connected", phoneNumber });
+          io.to(`device-${deviceId}`).emit("status", { deviceId, status: "connected", phoneNumber });
         }
       });
 
       return sock;
     } catch (err) {
       console.error(`[${deviceId}] Critical session error:`, err);
-      socket.emit("error", { deviceId, message: "Gagal inisialisasi sesi WhatsApp" });
+      io.to(`device-${deviceId}`).emit("error", { deviceId, message: "Gagal inisialisasi sesi WhatsApp" });
     }
   }
 
@@ -148,6 +186,32 @@ async function startServer() {
       console.error("Error sending message:", error);
       res.status(500).json({ error: "Failed to send message" });
     }
+  });
+
+  // API to delete session
+  app.delete("/api/sessions/:deviceId", async (req, res) => {
+    const { deviceId } = req.params;
+    const sock = sessions.get(deviceId);
+
+    if (sock) {
+      try {
+        sock.ev.removeAllListeners("connection.update");
+        sock.logout();
+        sock.end(undefined);
+      } catch (e) {}
+      sessions.delete(deviceId);
+    }
+
+    const sessionDir = path.join(__dirname, "sessions", deviceId);
+    if (fs.existsSync(sessionDir)) {
+      try {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+      } catch (rmErr) {
+        console.error("Failed to remove session dir:", rmErr);
+      }
+    }
+
+    res.json({ success: true });
   });
 
   // Vite middleware

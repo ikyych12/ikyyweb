@@ -5,7 +5,7 @@ import { Input } from "../components/ui/Input";
 import { Modal } from "../components/ui/Modal";
 import { Badge } from "../components/ui/Badge";
 import { useStore } from "../store";
-import { Smartphone, Plus, Trash2, QrCode, Hash, RefreshCcw, Loader2 } from "lucide-react";
+import { Smartphone, Plus, Trash2, QrCode, Hash, RefreshCcw, Loader2, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { motion } from "motion/react";
 import { io, Socket } from "socket.io-client";
@@ -20,6 +20,7 @@ export default function Devices() {
   
   const [pairingDevice, setPairingDevice] = React.useState<string | null>(null);
   const [qrCode, setQrCode] = React.useState<string | null>(null);
+  const [pairingCode, setPairingCode] = React.useState<string | null>(null);
   const [socket, setSocket] = React.useState<Socket | null>(null);
 
   const userDevices = devices.filter(d => d.userId === currentUser?.id);
@@ -30,6 +31,12 @@ export default function Devices() {
 
     newSocket.on("qr", ({ deviceId, qr }) => {
       setQrCode(qr);
+      setPairingCode(null);
+    });
+
+    newSocket.on("pairing-code", ({ deviceId, code }) => {
+      setPairingCode(code);
+      setQrCode(null);
     });
 
     newSocket.on("status", ({ deviceId, status, phoneNumber }) => {
@@ -38,6 +45,7 @@ export default function Devices() {
         toast.success("Perangkat berhasil terhubung!");
         setPairingDevice(null);
         setQrCode(null);
+        setPairingCode(null);
       }
     });
 
@@ -45,6 +53,7 @@ export default function Devices() {
       toast.error(message);
       setPairingDevice(null);
       setQrCode(null);
+      setPairingCode(null);
     });
 
     return () => {
@@ -68,11 +77,12 @@ export default function Devices() {
     setPhoneNumber("");
   };
 
-  const startPairing = (deviceId: string) => {
+  const startPairing = (deviceId: string, phone: string, method: 'qr' | 'pairing') => {
     if (!socket) return;
     setPairingDevice(deviceId);
     setQrCode(null);
-    socket.emit("init-session", deviceId);
+    setPairingCode(null);
+    socket.emit("init-session", deviceId, phone, method);
   };
 
   return (
@@ -82,10 +92,20 @@ export default function Devices() {
           <h1 className="text-3xl font-bold tracking-tight">Perangkat</h1>
           <p className="text-muted-foreground">Kelola perangkat WhatsApp Anda di sini.</p>
         </div>
-        <Button onClick={() => setIsAddModalOpen(true)} className="gap-2">
-          <Plus className="w-4 h-4" />
-          Tambah Perangkat
-        </Button>
+        <div className="flex gap-2">
+          <Button 
+            variant="outline" 
+            size="icon" 
+            onClick={() => window.dispatchEvent(new Event('storage_update'))}
+            title="Refresh Data"
+          >
+            <RefreshCcw className="w-4 h-4" />
+          </Button>
+          <Button onClick={() => setIsAddModalOpen(true)} className="gap-2">
+            <Plus className="w-4 h-4" />
+            Tambah Perangkat
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
@@ -129,18 +149,38 @@ export default function Devices() {
                 <CardContent className="space-y-4">
                   {pairingDevice === device.id && (
                     <div className="flex flex-col items-center justify-center p-4 bg-muted rounded-lg space-y-3">
-                      {qrCode ? (
-                        <>
-                          <div className="bg-white p-2 rounded-lg shadow-sm">
-                            <img src={qrCode} alt="WhatsApp QR Code" className="w-32 h-32" />
+                      {device.connectionMethod === 'qr' ? (
+                        qrCode ? (
+                          <>
+                            <div className="bg-white p-2 rounded-lg shadow-sm">
+                              <img src={qrCode} alt="WhatsApp QR Code" className="w-32 h-32" />
+                            </div>
+                            <p className="text-[10px] text-center text-muted-foreground animate-pulse">Scan QR ini di WhatsApp Anda</p>
+                          </>
+                        ) : (
+                          <div className="flex flex-col items-center py-8">
+                            <Loader2 className="w-8 h-8 animate-spin text-primary mb-2" />
+                            <p className="text-xs text-muted-foreground">Menyiapkan QR Code...</p>
                           </div>
-                          <p className="text-[10px] text-center text-muted-foreground animate-pulse">Scan QR ini di WhatsApp Anda</p>
-                        </>
+                        )
                       ) : (
-                        <div className="flex flex-col items-center py-8">
-                          <Loader2 className="w-8 h-8 animate-spin text-primary mb-2" />
-                          <p className="text-xs text-muted-foreground">Menyiapkan QR Code...</p>
-                        </div>
+                        pairingCode ? (
+                          <div className="text-center space-y-2">
+                            <div className="flex gap-1 justify-center">
+                              {pairingCode.split('').map((char, idx) => (
+                                <div key={idx} className="w-8 h-10 bg-background border rounded flex items-center justify-center text-xl font-bold shadow-sm">
+                                  {char}
+                                </div>
+                              ))}
+                            </div>
+                            <p className="text-[10px] text-muted-foreground">Masukkan kode ini di WhatsApp Anda</p>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col items-center py-8">
+                            <Loader2 className="w-8 h-8 animate-spin text-primary mb-2" />
+                            <p className="text-xs text-muted-foreground">Menyiapkan Pairing Code...</p>
+                          </div>
+                        )
                       )}
                     </div>
                   )}
@@ -149,7 +189,7 @@ export default function Devices() {
                     <Button 
                       variant={device.status === 'connected' ? "outline" : "default"} 
                       className="flex-1 gap-2"
-                      onClick={() => startPairing(device.id)}
+                      onClick={() => startPairing(device.id, device.phoneNumber, device.connectionMethod)}
                       disabled={device.status === 'connected' || pairingDevice === device.id}
                     >
                       {pairingDevice === device.id ? (
@@ -160,12 +200,42 @@ export default function Devices() {
                       {device.status === 'connected' ? 'Connected' : pairingDevice === device.id ? 'Pairing...' : 'Connect'}
                     </Button>
                     <Button 
+                      variant="outline" 
+                      size="icon"
+                      onClick={async () => {
+                        toast.promise(
+                          fetch(`/api/sessions/${device.id}`, { method: 'DELETE' }),
+                          {
+                            loading: 'Mereset sesi...',
+                            success: 'Sesi berhasil direset. Silakan hubungkan ulang.',
+                            error: 'Gagal mereset sesi.'
+                          }
+                        );
+                        setPairingDevice(null);
+                        setQrCode(null);
+                        setPairingCode(null);
+                        updateDeviceStatus(device.id, 'disconnected');
+                      }}
+                      title="Reset Sesi (Gunakan jika stuck)"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                    </Button>
+                    <Button 
                       variant="destructive" 
                       size="icon"
-                      onClick={() => {
-                        deleteDevice(device.id);
-                        toast.info("Perangkat dihapus.");
+                      onClick={async () => {
+                        if (confirm("Hapus perangkat ini? Sesi WhatsApp juga akan dihapus.")) {
+                          try {
+                            await fetch(`/api/sessions/${device.id}`, { method: 'DELETE' });
+                            deleteDevice(device.id);
+                            toast.info("Perangkat dan sesi dihapus.");
+                          } catch (err) {
+                            toast.error("Gagal menghapus sesi di server.");
+                            deleteDevice(device.id);
+                          }
+                        }
                       }}
+                      title="Hapus Perangkat"
                     >
                       <Trash2 className="w-4 h-4" />
                     </Button>
