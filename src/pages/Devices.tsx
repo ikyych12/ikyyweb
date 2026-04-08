@@ -10,10 +10,12 @@ import { toast } from "sonner";
 import { motion } from "motion/react";
 import { io, Socket } from "socket.io-client";
 import { cn } from "../lib/utils";
+import { Html5QrcodeScanner } from "html5-qrcode";
 
 export default function Devices() {
   const { currentUser, devices, addDevice, updateDeviceStatus, deleteDevice, settings } = useStore();
   const [isAddModalOpen, setIsAddModalOpen] = React.useState(false);
+  const [isScannerOpen, setIsScannerOpen] = React.useState(false);
   const [deviceName, setDeviceName] = React.useState("");
   const [phoneNumber, setPhoneNumber] = React.useState("");
   const [method, setMethod] = React.useState<'qr' | 'pairing'>('qr');
@@ -21,6 +23,40 @@ export default function Devices() {
   const [pairingDevice, setPairingDevice] = React.useState<string | null>(null);
   const [qrCode, setQrCode] = React.useState<string | null>(null);
   const [socket, setSocket] = React.useState<Socket | null>(null);
+
+  React.useEffect(() => {
+    if (isScannerOpen) {
+      const scanner = new Html5QrcodeScanner(
+        "reader",
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        /* verbose= */ false
+      );
+
+      scanner.render(
+        (decodedText) => {
+          // Logic when QR is scanned
+          // Assuming QR contains "name|phone" or just "phone"
+          if (decodedText.includes("|")) {
+            const [name, phone] = decodedText.split("|");
+            setDeviceName(name);
+            setPhoneNumber(phone);
+          } else {
+            setPhoneNumber(decodedText);
+          }
+          toast.success("Data berhasil dipindai!");
+          setIsScannerOpen(false);
+          scanner.clear();
+        },
+        (error) => {
+          // console.warn(error);
+        }
+      );
+
+      return () => {
+        scanner.clear().catch(err => console.error("Failed to clear scanner", err));
+      };
+    }
+  }, [isScannerOpen]);
 
   const userDevices = devices.filter(d => d.userId === currentUser?.id);
 
@@ -123,17 +159,39 @@ export default function Devices() {
                 <CardContent className="space-y-4">
                   {pairingDevice === device.id && (
                     <div className="flex flex-col items-center justify-center p-4 bg-muted rounded-lg space-y-3">
-                      {qrCode ? (
-                        <>
-                          <div className="bg-white p-2 rounded-lg shadow-sm">
-                            <img src={qrCode} alt="WhatsApp QR Code" className="w-32 h-32" />
+                      {!isScannerOpen ? (
+                        qrCode ? (
+                          <>
+                            <div className="bg-white p-2 rounded-lg shadow-sm">
+                              <img src={qrCode} alt="WhatsApp QR Code" className="w-32 h-32" />
+                            </div>
+                            <p className="text-[10px] text-center text-muted-foreground animate-pulse">Scan QR ini di WhatsApp Anda</p>
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              className="text-[10px] h-6"
+                              onClick={() => setIsScannerOpen(true)}
+                            >
+                              Gunakan Kamera untuk Scan Kode
+                            </Button>
+                          </>
+                        ) : (
+                          <div className="flex flex-col items-center py-8">
+                            <Loader2 className="w-8 h-8 animate-spin text-primary mb-2" />
+                            <p className="text-xs text-muted-foreground">Menyiapkan QR Code...</p>
                           </div>
-                          <p className="text-[10px] text-center text-muted-foreground animate-pulse">Scan QR ini di WhatsApp Anda</p>
-                        </>
+                        )
                       ) : (
-                        <div className="flex flex-col items-center py-8">
-                          <Loader2 className="w-8 h-8 animate-spin text-primary mb-2" />
-                          <p className="text-xs text-muted-foreground">Menyiapkan QR Code...</p>
+                        <div className="w-full space-y-2">
+                          <div id="reader" className="w-full overflow-hidden rounded-lg border bg-black aspect-square"></div>
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className="w-full text-[10px]"
+                            onClick={() => setIsScannerOpen(false)}
+                          >
+                            Tutup Kamera
+                          </Button>
                         </div>
                       )}
                     </div>
@@ -177,6 +235,31 @@ export default function Devices() {
         title="Tambah Perangkat Baru"
       >
         <form onSubmit={handleAddDevice} className="space-y-4">
+          {!isScannerOpen ? (
+            <Button 
+              type="button" 
+              variant="outline" 
+              className="w-full gap-2 border-dashed"
+              onClick={() => setIsScannerOpen(true)}
+            >
+              <QrCode className="w-4 h-4" />
+              Scan QR untuk Isi Otomatis
+            </Button>
+          ) : (
+            <div className="space-y-2">
+              <div id="reader" className="overflow-hidden rounded-lg border bg-black"></div>
+              <Button 
+                type="button" 
+                variant="ghost" 
+                size="sm" 
+                className="w-full"
+                onClick={() => setIsScannerOpen(false)}
+              >
+                Batal Scan
+              </Button>
+            </div>
+          )}
+
           <div className="space-y-2">
             <label className="text-sm font-medium">Nama Perangkat</label>
             <Input 
