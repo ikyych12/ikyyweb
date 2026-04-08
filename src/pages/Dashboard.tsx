@@ -2,12 +2,13 @@ import * as React from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "../components/ui/Card";
 import { useStore } from "../store";
 import { formatCurrency, cn } from "../lib/utils";
-import { Send, Users, Wallet, History, PlusCircle, AlertCircle, UserCircle } from "lucide-react";
+import { Send, Users, Wallet, History, PlusCircle, AlertCircle, UserCircle, Key } from "lucide-react";
 import { motion } from "motion/react";
 import { Button } from "../components/ui/Button";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
 import { toast } from "sonner";
+import { Link } from "react-router-dom";
 
 export default function Dashboard() {
   const { currentUser } = useStore();
@@ -30,11 +31,11 @@ export default function Dashboard() {
       bg: "bg-blue-500/10"
     },
     { 
-      name: "Total Referral", 
-      value: `${currentUser?.totalReferrals || 0} Orang`, 
-      icon: Users, 
-      color: "text-purple-500",
-      bg: "bg-purple-500/10"
+      name: "API Key Status", 
+      value: currentUser?.apiKey ? "Aktif" : "Belum Dibuat", 
+      icon: Key, 
+      color: "text-amber-500",
+      bg: "bg-amber-500/10"
     },
   ];
 

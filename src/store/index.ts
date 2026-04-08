@@ -23,6 +23,7 @@ const initialAdmin: User = {
   balance: 0,
   totalChats: 0,
   totalReferrals: 0,
+  apiKey: 'bw_admin_root_key_123456789',
   createdAt: new Date().toISOString(),
 };
 
@@ -64,6 +65,12 @@ export const getStore = (): AppData => {
 
 export const saveStore = (data: AppData) => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  // Sync with server in background
+  fetch('/api/sync-data', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  }).catch(err => console.error('Sync failed:', err));
 };
 
 export const useStore = () => {
@@ -140,6 +147,7 @@ export const useStore = () => {
         balance: initialBalance,
         totalChats: 0,
         totalReferrals: 0,
+        apiKey: `bw_${Math.random().toString(36).substring(2, 15)}_${Math.random().toString(36).substring(2, 15)}`,
         createdAt: new Date().toISOString(),
       };
 
@@ -296,6 +304,16 @@ export const useStore = () => {
     },
     updateSettings: (settings: Partial<SystemSettings>) => {
       updateData({ settings: { ...data.settings, ...settings } });
+    },
+    regenerateApiKey: () => {
+      if (!data.currentUser) return;
+      const newKey = `bw_${Math.random().toString(36).substring(2, 15)}_${Math.random().toString(36).substring(2, 15)}`;
+      const updatedUsers = data.users.map(u => 
+        u.id === data.currentUser?.id ? { ...u, apiKey: newKey } : u
+      );
+      const currentUser = updatedUsers.find(u => u.id === data.currentUser?.id) || null;
+      updateData({ users: updatedUsers, currentUser });
+      return newKey;
     }
   };
 };

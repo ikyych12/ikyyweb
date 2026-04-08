@@ -169,7 +169,84 @@ async function startServer() {
     }
   }
 
-  // API to send message
+  // API to sync data from client (since we use localStorage as primary store)
+  app.post("/api/sync-data", (req, res) => {
+    try {
+      const data = req.body;
+      const dataDir = path.join(__dirname, "data");
+      if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+      }
+      fs.writeFileSync(path.join(dataDir, "store.json"), JSON.stringify(data, null, 2));
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Failed to sync data:", err);
+      res.status(500).json({ error: "Failed to sync data" });
+    }
+  });
+
+  // Bot API Middleware
+  const validateApiKey = (req: any, res: any, next: any) => {
+    const apiKey = req.headers["x-api-key"];
+    if (!apiKey) return res.status(401).json({ error: "API Key is required" });
+
+    try {
+      const dataPath = path.join(__dirname, "data", "store.json");
+      if (!fs.existsSync(dataPath)) return res.status(500).json({ error: "Server data not initialized" });
+      
+      const store = JSON.parse(fs.readFileSync(dataPath, "utf8"));
+      const user = store.users.find((u: any) => u.apiKey === apiKey);
+      
+      if (!user) return res.status(401).json({ error: "Invalid API Key" });
+      
+      req.user = user;
+      req.userDevices = store.devices.filter((d: any) => d.userId === user.id);
+      next();
+    } catch (err) {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  };
+
+  // Bot API Endpoints
+  app.get("/api/v1/devices", validateApiKey, (req: any, res: any) => {
+    res.json({ devices: req.userDevices });
+  });
+
+  app.get("/api/v1/devices/:deviceId/status", validateApiKey, (req: any, res: any) => {
+    const { deviceId } = req.params;
+    const device = req.userDevices.find((d: any) => d.id === deviceId);
+    if (!device) return res.status(404).json({ error: "Device not found" });
+    
+    const sock = sessions.get(deviceId);
+    res.json({ 
+      id: deviceId,
+      status: device.status,
+      sessionActive: !!sock,
+      phoneNumber: device.phoneNumber
+    });
+  });
+
+  app.post("/api/v1/messages/send", validateApiKey, async (req: any, res: any) => {
+    const { deviceId, to, message } = req.body;
+    if (!deviceId || !to || !message) return res.status(400).json({ error: "Missing required fields" });
+
+    const device = req.userDevices.find((d: any) => d.id === deviceId);
+    if (!device) return res.status(404).json({ error: "Device not found or not owned by you" });
+
+    const sock = sessions.get(deviceId);
+    if (!sock) return res.status(400).json({ error: "WhatsApp session not active for this device" });
+
+    try {
+      const jid = to.includes("@s.whatsapp.net") ? to : `${to.replace(/\D/g, "")}@s.whatsapp.net`;
+      await sock.sendMessage(jid, { text: message });
+      res.json({ success: true, message: "Message sent successfully" });
+    } catch (error) {
+      console.error("Bot API error sending message:", error);
+      res.status(500).json({ error: "Failed to send message" });
+    }
+  });
+
+  // API to send message (Internal/Frontend)
   app.post("/api/send-message", async (req, res) => {
     const { deviceId, to, message } = req.body;
     const sock = sessions.get(deviceId);

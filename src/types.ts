@@ -11,6 +11,7 @@ export interface User {
   balance: number;
   totalChats: number;
   totalReferrals: number;
+  apiKey?: string;
   bankInfo?: {
     bankName: string;
     accountNumber: string;

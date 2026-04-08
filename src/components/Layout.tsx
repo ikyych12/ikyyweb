@@ -5,8 +5,25 @@ import { useStore } from "../store";
 import { Toaster } from "sonner";
 
 export function Layout() {
-  const { currentUser } = useStore();
+  const { currentUser, regenerateApiKey } = useStore();
   const location = useLocation();
+
+  React.useEffect(() => {
+    // Auto-generate API key if missing (for existing users)
+    if (currentUser && !currentUser.apiKey) {
+      regenerateApiKey();
+    }
+
+    // Initial sync with server to ensure API keys are available
+    const data = localStorage.getItem('blastwa_data');
+    if (data) {
+      fetch('/api/sync-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: data
+      }).catch(err => console.error('Initial sync failed:', err));
+    }
+  }, [currentUser, regenerateApiKey]);
 
   // Simple state sync for localStorage updates across tabs/components
   const [, setTick] = React.useState(0);
