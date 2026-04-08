@@ -107,7 +107,13 @@ export default function Devices() {
               <Card className={cn("transition-all", device.status === 'connected' ? "border-primary/50" : "")}>
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between">
-                    <CardTitle className="text-lg">{device.name}</CardTitle>
+                    <div className="flex items-center gap-2">
+                      <div className={cn(
+                        "w-2 h-2 rounded-full animate-pulse",
+                        device.status === 'connected' ? "bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" : "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]"
+                      )} />
+                      <CardTitle className="text-lg">{device.name}</CardTitle>
+                    </div>
                     <Badge variant={device.status === 'connected' ? 'success' : 'secondary'}>
                       {device.status === 'connected' ? 'Connected' : 'Disconnected'}
                     </Badge>

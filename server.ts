@@ -73,15 +73,18 @@ async function startServer() {
 
     sock.ev.on("connection.update", async (update) => {
       const { connection, lastDisconnect, qr } = update;
+      console.log(`[${deviceId}] Connection update:`, connection);
 
       if (qr) {
+        console.log(`[${deviceId}] QR generated`);
         const qrDataUrl = await QRCode.toDataURL(qr);
         socket.emit("qr", { deviceId, qr: qrDataUrl });
       }
 
       if (connection === "close") {
-        const shouldReconnect = (lastDisconnect?.error as any)?.output?.statusCode !== DisconnectReason.loggedOut;
-        console.log("Connection closed due to ", lastDisconnect?.error, ", reconnecting ", shouldReconnect);
+        const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+        console.log(`[${deviceId}] Connection closed. Status: ${statusCode}, Reconnecting: ${shouldReconnect}`);
         
         socket.emit("status", { deviceId, status: "disconnected" });
         
@@ -89,10 +92,12 @@ async function startServer() {
           createWhatsAppSession(deviceId, socket);
         } else {
           sessions.delete(deviceId);
-          fs.rmSync(sessionDir, { recursive: true, force: true });
+          if (fs.existsSync(sessionDir)) {
+            fs.rmSync(sessionDir, { recursive: true, force: true });
+          }
         }
       } else if (connection === "open") {
-        console.log("Opened connection for:", deviceId);
+        console.log(`[${deviceId}] Connection opened successfully`);
         const phoneNumber = sock.user?.id.split(":")[0];
         socket.emit("status", { deviceId, status: "connected", phoneNumber });
       }
