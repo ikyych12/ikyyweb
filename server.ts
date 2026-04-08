@@ -1,0 +1,144 @@
+import express from "express";
+import { createServer } from "http";
+import { Server } from "socket.io";
+import { createServer as createViteServer } from "vite";
+import path from "path";
+import { fileURLToPath } from "url";
+import fs from "fs";
+import makeWASocket, { 
+  DisconnectReason, 
+  useMultiFileAuthState, 
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore
+} from "@whiskeysockets/baileys";
+import pino from "pino";
+import QRCode from "qrcode";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const logger = pino({ level: "silent" });
+const sessions = new Map<string, any>();
+
+async function startServer() {
+  const app = express();
+  const httpServer = createServer(app);
+  const io = new Server(httpServer, {
+    cors: { origin: "*" }
+  });
+
+  app.use(express.json());
+
+  // API Routes
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "ok" });
+  });
+
+  // WhatsApp Session Management
+  io.on("connection", (socket) => {
+    console.log("Client connected:", socket.id);
+
+    socket.on("init-session", async (deviceId: string) => {
+      console.log("Initializing session for:", deviceId);
+      await createWhatsAppSession(deviceId, socket);
+    });
+
+    socket.on("disconnect", () => {
+      console.log("Client disconnected:", socket.id);
+    });
+  });
+
+  async function createWhatsAppSession(deviceId: string, socket: any) {
+    const sessionDir = path.join(__dirname, "sessions", deviceId);
+    if (!fs.existsSync(sessionDir)) {
+      fs.mkdirSync(sessionDir, { recursive: true });
+    }
+
+    const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+    const { version } = await fetchLatestBaileysVersion();
+
+    const sock = makeWASocket({
+      version,
+      printQRInTerminal: false,
+      auth: {
+        creds: state.creds,
+        keys: makeCacheableSignalKeyStore(state.keys, logger),
+      },
+      logger,
+    });
+
+    sessions.set(deviceId, sock);
+
+    sock.ev.on("creds.update", saveCreds);
+
+    sock.ev.on("connection.update", async (update) => {
+      const { connection, lastDisconnect, qr } = update;
+
+      if (qr) {
+        const qrDataUrl = await QRCode.toDataURL(qr);
+        socket.emit("qr", { deviceId, qr: qrDataUrl });
+      }
+
+      if (connection === "close") {
+        const shouldReconnect = (lastDisconnect?.error as any)?.output?.statusCode !== DisconnectReason.loggedOut;
+        console.log("Connection closed due to ", lastDisconnect?.error, ", reconnecting ", shouldReconnect);
+        
+        socket.emit("status", { deviceId, status: "disconnected" });
+        
+        if (shouldReconnect) {
+          createWhatsAppSession(deviceId, socket);
+        } else {
+          sessions.delete(deviceId);
+          fs.rmSync(sessionDir, { recursive: true, force: true });
+        }
+      } else if (connection === "open") {
+        console.log("Opened connection for:", deviceId);
+        const phoneNumber = sock.user?.id.split(":")[0];
+        socket.emit("status", { deviceId, status: "connected", phoneNumber });
+      }
+    });
+
+    return sock;
+  }
+
+  // API to send message
+  app.post("/api/send-message", async (req, res) => {
+    const { deviceId, to, message } = req.body;
+    const sock = sessions.get(deviceId);
+
+    if (!sock) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    try {
+      const jid = to.includes("@s.whatsapp.net") ? to : `${to}@s.whatsapp.net`;
+      await sock.sendMessage(jid, { text: message });
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error sending message:", error);
+      res.status(500).json({ error: "Failed to send message" });
+    }
+  });
+
+  // Vite middleware
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  }
+
+  const PORT = 3000;
+  httpServer.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
+}
+
+startServer();

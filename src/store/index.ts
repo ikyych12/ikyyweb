@@ -162,11 +162,15 @@ export const useStore = () => {
         phoneNumber,
         status: 'disconnected',
         connectionMethod: method,
-        pairingCode: method === 'pairing' ? Math.random().toString(36).substring(2, 10).toUpperCase() : undefined,
-        qrCode: method === 'qr' ? `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=WA_AUTH_${Date.now()}` : undefined,
         createdAt: new Date().toISOString(),
       };
       updateData({ devices: [...data.devices, newDevice] });
+    },
+    updateDeviceStatus: (deviceId: string, status: 'connected' | 'disconnected', phoneNumber?: string) => {
+      const updatedDevices = data.devices.map(d => 
+        d.id === deviceId ? { ...d, status, phoneNumber: phoneNumber || d.phoneNumber } : d
+      );
+      updateData({ devices: updatedDevices });
     },
     toggleDeviceStatus: (deviceId: string) => {
       const updatedDevices = data.devices.map(d => 

@@ -57,31 +57,58 @@ export default function Blast() {
       };
 
       let currentSent = 0;
-      const interval = setInterval(() => {
-        setDeviceStatuses(prev => {
-          const deviceStatus = prev[deviceId];
-          if (!deviceStatus || currentSent >= numbers.length) {
-            clearInterval(deviceStatus?.intervalId);
-            if (currentSent >= numbers.length) {
+      const interval = setInterval(async () => {
+        const deviceStatus = deviceStatuses[deviceId]; // Note: this might be stale in closure, but setDeviceStatuses updater will handle it
+        
+        if (currentSent >= numbers.length) {
+          clearInterval(interval);
+          return;
+        }
+
+        const targetNumber = numbers[currentSent];
+        try {
+          const response = await fetch("/api/send-message", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ deviceId, to: targetNumber, message })
+          });
+          
+          if (!response.ok) throw new Error("Failed to send");
+
+          currentSent++;
+          setDeviceStatuses(prev => {
+            const ds = prev[deviceId];
+            if (!ds) return prev;
+            
+            const isFinished = currentSent >= numbers.length;
+            if (isFinished) {
+              clearInterval(ds.intervalId);
               processBlast(currentUser!.id, numbers.length);
               toast.success(`Blast selesai pada ${devices.find(d => d.id === deviceId)?.name}`);
             }
+
             return {
               ...prev,
-              [deviceId]: { ...deviceStatus, isBlasting: false, intervalId: undefined }
+              [deviceId]: {
+                ...ds,
+                isBlasting: !isFinished,
+                intervalId: isFinished ? undefined : ds.intervalId,
+                progress: { total: numbers.length, sent: currentSent },
+                logs: [`[${new Date().toLocaleTimeString()}] Terkirim ke ${targetNumber}`, ...ds.logs].slice(0, 50)
+              }
             };
-          }
-
-          currentSent++;
-          return {
+          });
+        } catch (err) {
+          console.error("Send error:", err);
+          currentSent++; // Skip or retry? Let's skip for now to avoid infinite loops
+          setDeviceStatuses(prev => ({
             ...prev,
             [deviceId]: {
-              ...deviceStatus,
-              progress: { total: numbers.length, sent: currentSent },
-              logs: [`[${new Date().toLocaleTimeString()}] Terkirim ke ${numbers[currentSent-1]}`, ...deviceStatus.logs].slice(0, 50)
+              ...prev[deviceId],
+              logs: [`[${new Date().toLocaleTimeString()}] GAGAL ke ${targetNumber}`, ...prev[deviceId].logs].slice(0, 50)
             }
-          };
-        });
+          }));
+        }
       }, delay * 1000);
 
       setDeviceStatuses(prev => ({

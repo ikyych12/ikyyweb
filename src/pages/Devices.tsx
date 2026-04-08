@@ -5,19 +5,46 @@ import { Input } from "../components/ui/Input";
 import { Modal } from "../components/ui/Modal";
 import { Badge } from "../components/ui/Badge";
 import { useStore } from "../store";
-import { Smartphone, Plus, Trash2, QrCode, Hash, RefreshCcw } from "lucide-react";
+import { Smartphone, Plus, Trash2, QrCode, Hash, RefreshCcw, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { motion } from "motion/react";
-import { QRCodeSVG } from "qrcode.react";
+import { io, Socket } from "socket.io-client";
+import { cn } from "../lib/utils";
 
 export default function Devices() {
-  const { currentUser, devices, addDevice, toggleDeviceStatus, deleteDevice, settings } = useStore();
+  const { currentUser, devices, addDevice, updateDeviceStatus, deleteDevice, settings } = useStore();
   const [isAddModalOpen, setIsAddModalOpen] = React.useState(false);
   const [deviceName, setDeviceName] = React.useState("");
   const [phoneNumber, setPhoneNumber] = React.useState("");
   const [method, setMethod] = React.useState<'qr' | 'pairing'>('qr');
+  
+  const [pairingDevice, setPairingDevice] = React.useState<string | null>(null);
+  const [qrCode, setQrCode] = React.useState<string | null>(null);
+  const [socket, setSocket] = React.useState<Socket | null>(null);
 
   const userDevices = devices.filter(d => d.userId === currentUser?.id);
+
+  React.useEffect(() => {
+    const newSocket = io();
+    setSocket(newSocket);
+
+    newSocket.on("qr", ({ deviceId, qr }) => {
+      setQrCode(qr);
+    });
+
+    newSocket.on("status", ({ deviceId, status, phoneNumber }) => {
+      updateDeviceStatus(deviceId, status, phoneNumber);
+      if (status === "connected") {
+        toast.success("Perangkat berhasil terhubung!");
+        setPairingDevice(null);
+        setQrCode(null);
+      }
+    });
+
+    return () => {
+      newSocket.disconnect();
+    };
+  }, []);
 
   const handleAddDevice = (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,6 +60,13 @@ export default function Devices() {
     setIsAddModalOpen(false);
     setDeviceName("");
     setPhoneNumber("");
+  };
+
+  const startPairing = (deviceId: string) => {
+    if (!socket) return;
+    setPairingDevice(deviceId);
+    setQrCode(null);
+    socket.emit("init-session", deviceId);
   };
 
   return (
@@ -70,7 +104,7 @@ export default function Devices() {
               animate={{ opacity: 1, scale: 1 }}
               transition={{ delay: i * 0.05 }}
             >
-              <Card>
+              <Card className={cn("transition-all", device.status === 'connected' ? "border-primary/50" : "")}>
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between">
                     <CardTitle className="text-lg">{device.name}</CardTitle>
@@ -81,34 +115,37 @@ export default function Devices() {
                   <CardDescription>{device.phoneNumber}</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {device.status === 'disconnected' && (
+                  {pairingDevice === device.id && (
                     <div className="flex flex-col items-center justify-center p-4 bg-muted rounded-lg space-y-3">
-                      {device.connectionMethod === 'qr' ? (
+                      {qrCode ? (
                         <>
-                          <div className="bg-white p-2 rounded-lg">
-                            <QRCodeSVG value={device.qrCode || ""} size={120} />
+                          <div className="bg-white p-2 rounded-lg shadow-sm">
+                            <img src={qrCode} alt="WhatsApp QR Code" className="w-32 h-32" />
                           </div>
-                          <p className="text-[10px] text-center text-muted-foreground">Scan QR ini di WhatsApp Anda</p>
+                          <p className="text-[10px] text-center text-muted-foreground animate-pulse">Scan QR ini di WhatsApp Anda</p>
                         </>
                       ) : (
-                        <>
-                          <div className="text-2xl font-mono font-bold tracking-widest text-primary">
-                            {device.pairingCode}
-                          </div>
-                          <p className="text-[10px] text-center text-muted-foreground">Masukkan kode ini di WhatsApp Pairing</p>
-                        </>
+                        <div className="flex flex-col items-center py-8">
+                          <Loader2 className="w-8 h-8 animate-spin text-primary mb-2" />
+                          <p className="text-xs text-muted-foreground">Menyiapkan QR Code...</p>
+                        </div>
                       )}
                     </div>
                   )}
                   
                   <div className="flex gap-2">
                     <Button 
-                      variant="outline" 
+                      variant={device.status === 'connected' ? "outline" : "default"} 
                       className="flex-1 gap-2"
-                      onClick={() => toggleDeviceStatus(device.id)}
+                      onClick={() => startPairing(device.id)}
+                      disabled={device.status === 'connected' || pairingDevice === device.id}
                     >
-                      <RefreshCcw className={cn("w-4 h-4", device.status === 'connected' ? "" : "animate-spin")} />
-                      {device.status === 'connected' ? 'Disconnect' : 'Connect'}
+                      {pairingDevice === device.id ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <RefreshCcw className="w-4 h-4" />
+                      )}
+                      {device.status === 'connected' ? 'Connected' : pairingDevice === device.id ? 'Pairing...' : 'Connect'}
                     </Button>
                     <Button 
                       variant="destructive" 
@@ -181,5 +218,3 @@ export default function Devices() {
     </div>
   );
 }
-
-import { cn } from "../lib/utils";
