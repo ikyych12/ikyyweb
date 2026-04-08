@@ -49,61 +49,86 @@ async function startServer() {
   });
 
   async function createWhatsAppSession(deviceId: string, socket: any) {
-    const sessionDir = path.join(__dirname, "sessions", deviceId);
-    if (!fs.existsSync(sessionDir)) {
-      fs.mkdirSync(sessionDir, { recursive: true });
-    }
-
-    const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
-    const { version } = await fetchLatestBaileysVersion();
-
-    const sock = makeWASocket({
-      version,
-      printQRInTerminal: false,
-      auth: {
-        creds: state.creds,
-        keys: makeCacheableSignalKeyStore(state.keys, logger),
-      },
-      logger,
-    });
-
-    sessions.set(deviceId, sock);
-
-    sock.ev.on("creds.update", saveCreds);
-
-    sock.ev.on("connection.update", async (update) => {
-      const { connection, lastDisconnect, qr } = update;
-      console.log(`[${deviceId}] Connection update:`, connection);
-
-      if (qr) {
-        console.log(`[${deviceId}] QR generated`);
-        const qrDataUrl = await QRCode.toDataURL(qr);
-        socket.emit("qr", { deviceId, qr: qrDataUrl });
+    try {
+      const sessionDir = path.join(__dirname, "sessions", deviceId);
+      if (!fs.existsSync(sessionDir)) {
+        fs.mkdirSync(sessionDir, { recursive: true });
       }
 
-      if (connection === "close") {
-        const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
-        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-        console.log(`[${deviceId}] Connection closed. Status: ${statusCode}, Reconnecting: ${shouldReconnect}`);
-        
-        socket.emit("status", { deviceId, status: "disconnected" });
-        
-        if (shouldReconnect) {
-          createWhatsAppSession(deviceId, socket);
-        } else {
-          sessions.delete(deviceId);
-          if (fs.existsSync(sessionDir)) {
-            fs.rmSync(sessionDir, { recursive: true, force: true });
+      console.log(`[${deviceId}] Starting session initialization...`);
+      const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+      
+      let version;
+      try {
+        const latest = await fetchLatestBaileysVersion();
+        version = latest.version;
+        console.log(`[${deviceId}] Using Baileys version:`, version.join("."));
+      } catch (err) {
+        console.error(`[${deviceId}] Failed to fetch version, using default`, err);
+        version = [2, 3000, 1015901307]; // Fallback version
+      }
+
+      const sock = makeWASocket({
+        version,
+        printQRInTerminal: false,
+        auth: {
+          creds: state.creds,
+          keys: makeCacheableSignalKeyStore(state.keys, logger),
+        },
+        logger,
+        browser: ["BlastWA", "Chrome", "1.0.0"],
+      });
+
+      sessions.set(deviceId, sock);
+
+      sock.ev.on("creds.update", saveCreds);
+
+      sock.ev.on("connection.update", async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+        console.log(`[${deviceId}] Connection update:`, connection);
+
+        if (qr) {
+          try {
+            console.log(`[${deviceId}] QR generated`);
+            const qrDataUrl = await QRCode.toDataURL(qr);
+            socket.emit("qr", { deviceId, qr: qrDataUrl });
+          } catch (qrErr) {
+            console.error(`[${deviceId}] QR generation error:`, qrErr);
+            socket.emit("error", { deviceId, message: "Gagal membuat QR Code" });
           }
         }
-      } else if (connection === "open") {
-        console.log(`[${deviceId}] Connection opened successfully`);
-        const phoneNumber = sock.user?.id.split(":")[0];
-        socket.emit("status", { deviceId, status: "connected", phoneNumber });
-      }
-    });
 
-    return sock;
+        if (connection === "close") {
+          const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
+          const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+          console.log(`[${deviceId}] Connection closed. Status: ${statusCode}, Reconnecting: ${shouldReconnect}`);
+          
+          socket.emit("status", { deviceId, status: "disconnected" });
+          
+          if (shouldReconnect) {
+            createWhatsAppSession(deviceId, socket);
+          } else {
+            sessions.delete(deviceId);
+            if (fs.existsSync(sessionDir)) {
+              try {
+                fs.rmSync(sessionDir, { recursive: true, force: true });
+              } catch (rmErr) {
+                console.error("Failed to remove session dir:", rmErr);
+              }
+            }
+          }
+        } else if (connection === "open") {
+          console.log(`[${deviceId}] Connection opened successfully`);
+          const phoneNumber = sock.user?.id.split(":")[0];
+          socket.emit("status", { deviceId, status: "connected", phoneNumber });
+        }
+      });
+
+      return sock;
+    } catch (err) {
+      console.error(`[${deviceId}] Critical session error:`, err);
+      socket.emit("error", { deviceId, message: "Gagal inisialisasi sesi WhatsApp" });
+    }
   }
 
   // API to send message

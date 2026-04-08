@@ -77,6 +77,12 @@ export default function Devices() {
       }
     });
 
+    newSocket.on("error", ({ deviceId, message }) => {
+      toast.error(message);
+      setPairingDevice(null);
+      setQrCode(null);
+    });
+
     return () => {
       newSocket.disconnect();
     };
